@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Parallel Pokémon fetch: runs requests in background and waits for all.
+# Parallel Pokémon fetch with jobs/kill-based process management
 # Requires: curl, jq
 
 set -eu
@@ -7,8 +7,6 @@ set -eu
 API_BASE="https://pokeapi.co/api/v2/pokemon"
 OUT_DIR="pokemon_data"
 ERR_FILE="batch_errors.txt"
-
-# Default list (lowercase)
 POKEMON="bulbasaur ivysaur venusaur charmander charmeleon"
 
 timestamp() { date +"%Y-%m-%d %H:%M:%S"; }
@@ -46,33 +44,40 @@ fetch_one() {
       return 1
     fi
 
-    # Retryable/network errors
     if [ "$tries" -ge "$max" ]; then
       echo "$(timestamp) [ERROR] $name failed after $tries tries (HTTP $status)." >> "$ERR_FILE"
       rm -f "$tmp"
       return 1
     fi
 
-    # Backoff for 429/5xx/network issues
     sleep "$delay"
-    delay=$((delay*2))
+    delay=$((delay*2))  # 1s -> 2s -> 4s
   done
 }
 
+# Cleanup any still-running background jobs on INT/TERM
+cleanup() {
+  echo "$(timestamp) [INFO] Cleaning up background jobs..." >> "$ERR_FILE"
+  # kill any remaining children; ignore errors if none
+  jobs -p | xargs -r kill -TERM 2>>"$ERR_FILE" || true
+}
+trap 'cleanup' INT TERM
+
 # Launch all in background
-pids=""
 for name in $POKEMON; do
   fetch_one "$name" &
-  pids="$pids $!"
 done
 
-# Wait for all and count failures
+# Wait for all background jobs using jobs -p
 failures=0
-for pid in $pids; do
+for pid in $(jobs -p); do
   if ! wait "$pid"; then
     failures=$((failures+1))
   fi
 done
+
+# Extra safety: ensure nothing is left running
+jobs -p | xargs -r kill -TERM 2>/dev/null || true
 
 # Summary
 if [ "$failures" -gt 0 ]; then
