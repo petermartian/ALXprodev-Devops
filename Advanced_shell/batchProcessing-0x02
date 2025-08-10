@@ -1,0 +1,76 @@
+#!/usr/bin/env sh
+# Batch Pokémon fetch with retries + error logging (max 3 tries)
+# Requires: curl, jq
+
+set -eu
+
+API_BASE="https://pokeapi.co/api/v2/pokemon"
+OUT_DIR="pokemon_data"
+ERR_FILE="batch_errors.txt"
+
+# list to fetch (lowercase)
+POKEMON="bulbasaur ivysaur venusaur charmander charmeleon"
+
+timestamp() { date +"%Y-%m-%d %H:%M:%S"; }
+
+mkdir -p "$OUT_DIR"
+: > "$ERR_FILE"   # truncate previous errors
+
+failures=0
+
+for name in $POKEMON; do
+  echo "Fetching data for $name..."
+  url="$API_BASE/$name"
+  tmp="$(mktemp)"
+  tries=0
+  max=3
+  delay=1
+
+  while :; do
+    tries=$((tries+1))
+
+    # Call API; if curl fails at TCP level, mark status as 000
+    status="$(curl -sS \
+      -H "User-Agent: ALXprodev-Devops/1.1 (+pokeapi-batch)" \
+      -w "%{http_code}" -o "$tmp" "$url" 2>>"$ERR_FILE" || echo "000")"
+
+    # Success: HTTP 200 + valid JSON
+    if [ "$status" = "200" ]; then
+      if jq -e . "$tmp" >/dev/null 2>>"$ERR_FILE"; then
+        mv "$tmp" "$OUT_DIR/$name.json"
+        echo "Saved data to $OUT_DIR/$name.json ✅"
+        break
+      else
+        echo "$(timestamp) [ERROR] Invalid JSON for $name." >> "$ERR_FILE"
+        rm -f "$tmp"; failures=$((failures+1))
+        break
+      fi
+    fi
+
+    # Non-retryable client errors (e.g., 404 invalid name)
+    if [ "$status" != "000" ] && [ "$status" -ge 400 ] && [ "$status" -lt 500 ] && [ "$status" != "429" ]; then
+      echo "$(timestamp) [ERROR] $name failed (HTTP $status). Not retrying." >> "$ERR_FILE"
+      rm -f "$tmp"; failures=$((failures+1))
+      break
+    fi
+
+    # Retryable: network (000), 429, or 5xx
+    if [ "$tries" -ge "$max" ]; then
+      echo "$(timestamp) [ERROR] $name failed after $tries tries (HTTP $status)." >> "$ERR_FILE"
+      rm -f "$tmp"; failures=$((failures+1))
+      break
+    fi
+
+    echo "Retrying in ${delay}s... (try $((tries+1))/$max, status $status)"
+    sleep "$delay"
+    delay=$((delay*2))  # backoff: 1s -> 2s -> 4s
+  done
+done
+
+# Summary
+if [ "$failures" -gt 0 ]; then
+  echo "Completed with $failures failure(s). See $ERR_FILE."
+  exit 1
+else
+  echo "All Pokémon fetched successfully 🎉"
+fi

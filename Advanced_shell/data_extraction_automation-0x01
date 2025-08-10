@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Extract Pokémon name, height (m), weight (kg), and types from data.json
+# Uses only jq (awk/sed not required)
+
+set -Eeuo pipefail
+IN="data.json"
+
+# Ensure data.json exists (from Task 0)
+if [ ! -s "$IN" ]; then
+  echo "data.json not found or empty. Run Task 0 first." >&2
+  exit 1
+fi
+
+jq -r '
+  # simple capitalize helper
+  def cap: (.[0:1] | ascii_upcase) + .[1:];
+
+  . as $p
+  | ($p.name | cap) as $name
+  | ($p.height / 10) as $meters      # decimeters -> meters
+  | ($p.weight / 10) as $kg          # hectograms -> kilograms
+  | ($p.types | map(.type.name | cap) | join("/")) as $types
+  | "\($name) is of type \($types), weighs \($kg)kg, and is \($meters)m tall."
+' "$IN"

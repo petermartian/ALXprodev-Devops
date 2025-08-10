@@ -1,0 +1,50 @@
+#!/usr/bin/env sh
+# Summarize Pokémon JSON files into a CSV and print averages.
+# Uses jq for extraction and awk for formatting & averages.
+
+set -eu
+
+DIR="pokemon_data"
+OUT="pokemon_report.csv"
+
+# Ensure input exists
+if [ ! -d "$DIR" ]; then
+  echo "Directory '$DIR' not found. Run Task 2 first." >&2
+  exit 1
+fi
+
+files=$(ls -1 "$DIR"/*.json 2>/dev/null || true)
+if [ -z "$files" ]; then
+  echo "No JSON files found in $DIR. Run Task 2 first." >&2
+  exit 1
+fi
+
+# Header
+printf "Name,Height (m),Weight (kg)\n" > "$OUT"
+
+# Build CSV: name (Capitalized), height in meters, weight in kg
+for f in $files; do
+  name=$(jq -r '.name' "$f" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
+  height_dm=$(jq -r '.height' "$f")   # decimeters
+  weight_hg=$(jq -r '.weight' "$f")   # hectograms
+  height_m=$(awk "BEGIN{printf \"%.1f\", $height_dm/10}")
+  weight_kg=$(awk "BEGIN{printf \"%.1f\", $weight_hg/10}")
+  printf "%s,%s,%s\n" "$name" "$height_m" "$weight_kg" >> "$OUT"
+done
+
+echo "CSV Report generated at: $OUT"
+echo
+cat "$OUT"
+echo
+
+# Averages with awk
+awk -F',' '
+  NR>1 {h+=$2; w+=$3; n++}
+  END {
+    if (n>0) {
+      printf "Average Height: %.2f m\nAverage Weight: %.2f kg\n", h/n, w/n
+    } else {
+      print "Average Height: 0 m\nAverage Weight: 0 kg"
+    }
+  }
+' "$OUT"
